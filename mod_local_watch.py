@@ -23,6 +23,7 @@ class ModuleLocalWatch(PluginModuleBase):
             "local_watch_enabled": "False", "local_watch_roots": "[]",
             "local_watch_interval": "300", "local_watch_debounce": "10",
             "local_watch_max_entries": "200000",
+            "local_watch_parallel_workers": "4",
             "local_watch_ignore_patterns": "@eaDir/\n#recycle/",
             "local_watch_discord_webhook_url": "",
             "local_watch_auto_cleanup": "True", "local_watch_retention_days": "30",
@@ -60,6 +61,9 @@ class ModuleLocalWatch(PluginModuleBase):
         max_entries = int(values.get("local_watch_max_entries", 200000))
         if not 1 <= max_entries <= 1200000:
             raise ValueError("감시 항목 한도는 1~1200000으로 입력해 주세요.")
+        parallel_workers = int(values.get("local_watch_parallel_workers", 4))
+        if not 1 <= parallel_workers <= 64:
+            raise ValueError("동시 조회 개수는 1~64로 입력해 주세요.")
         drive = []
         if str(values.get("gdrive_scan_enabled")).lower() == "true" and values.get("gdrive_scan_input_mode") == "builtin":
             configured = json.loads(values.get("gdrive_scan_builtin_roots") or "[]")
@@ -71,7 +75,8 @@ class ModuleLocalWatch(PluginModuleBase):
         return {"roots": roots, "interval": max(30, min(int(values.get("local_watch_interval") or 300), 86400)),
                 "max_entries": max_entries, "extensions": sorted(parse_extensions(values.get("local_watch_extensions"))),
                 "ignore_patterns": [line.strip() for line in values.get("local_watch_ignore_patterns", "@eaDir/\n#recycle/").splitlines() if line.strip()],
-                "debounce": max(2, min(int(values.get("local_watch_debounce") or 10), 120))}
+                "debounce": max(2, min(int(values.get("local_watch_debounce") or 10), 120)),
+                "parallel_workers": parallel_workers}
 
     def plugin_load(self):
         if self.model:
