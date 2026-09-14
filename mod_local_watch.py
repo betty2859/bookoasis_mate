@@ -351,6 +351,23 @@ class ModuleLocalWatch(PluginModuleBase):
                 return jsonify({"ret": "success" if updated else "warning",
                     "msg": f"같은 오류 이벤트 {updated}건을 재시도에 등록했습니다." if updated else "대상 이벤트 상태가 변경되어 재시도하지 못했습니다.",
                     "data": {"error": error, "matched": len(event_ids), "updated": updated}})
+            elif command == "retry_selected":
+                raw_ids = req.form.get("ids") or ""
+                try:
+                    event_ids = sorted({int(x) for x in raw_ids.split(",") if x.strip()})
+                except ValueError:
+                    return jsonify({"ret": "warning", "msg": "선택한 항목 형식이 올바르지 않습니다."}), 400
+                if not event_ids:
+                    return jsonify({"ret": "warning", "msg": "재시도할 항목을 먼저 선택해 주세요."}), 400
+                if len(event_ids) > 5000:
+                    return jsonify({"ret": "warning", "msg": "한 번에 최대 5,000건까지 선택할 수 있습니다."}), 400
+                # retry_many() 내부가 이미 상태='failed' AND path != ''인 것만 골라 500건씩
+                # 안전하게 나눠 처리하므로, 여기서 넘긴 ID 중 이미 완료·대기 상태로 바뀐
+                # 것이 섞여 있어도 자동으로 걸러진다.
+                updated = self.model.retry_many(event_ids)
+                return jsonify({"ret": "success" if updated else "warning",
+                    "msg": f"선택한 {len(event_ids)}건 중 {updated}건을 재시도에 등록했습니다." if updated else "선택한 항목이 이미 상태가 변경되어 재시도하지 못했습니다.",
+                    "data": {"selected": len(event_ids), "updated": updated}})
             else:
                 return jsonify({"ret": "warning", "msg": "지원하지 않는 요청입니다."}), 400
             return jsonify({"ret": "success", "msg": "요청을 처리했습니다."})

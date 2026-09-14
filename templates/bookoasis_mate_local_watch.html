@@ -54,6 +54,11 @@
     <button id="local_refresh" class="btn btn-sm btn-primary">검색</button>
     <button id="local_reset" class="btn btn-sm btn-outline-secondary">리셋</button></div>
   </div>
+  <div class="doctor-toolbar" style="justify-content:flex-start; gap:0.5rem; margin-bottom:0.5rem;">
+    <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; margin:0;"><input type="checkbox" id="local_select_all"> 전체 선택(실패 항목만)</label>
+    <button type="button" id="local_select_clear" class="btn btn-sm btn-outline-secondary">선택 해제</button>
+    <button type="button" id="local_retry_selected" class="btn btn-sm btn-warning" disabled>선택 항목 일괄 재시도 (<span id="local_selected_count">0</span>)</button>
+  </div>
   <div class="table-responsive"><div id="local_events" class="doctor-gdrive-list" role="list" aria-label="변경 이벤트"></div></div>
   <div id="local_empty" class="doctor-empty" hidden>조건에 맞는 변경 이벤트가 없습니다.</div>
   <div class="doctor-pagination"><button id="local_prev" class="btn btn-sm btn-outline-primary">이전</button><span id="local_page" class="mx-2"></span><button id="local_next" class="btn btn-sm btn-outline-primary">다음</button></div>
@@ -117,6 +122,7 @@
 <dialog id="local_json_dialog" class="doctor-card" style="width:90%;max-width:1000px;max-height:85vh" aria-labelledby="local_json_title"><form method="dialog" class="d-flex justify-content-between align-items-center"><h4 id="local_json_title">로컬 변경 이벤트 JSON</h4><button class="btn btn-sm btn-outline-primary">닫기</button></form><pre id="local_json_content" class="doctor-gdrive-json"></pre></dialog>
 <script>
 var localPage = 1, localPages = 1, localRunning = false, localLoading = false, localInstalling = false;
+var localSelectedIds = new Set();
 function localWatchdogStatus() {
   localRequest('watchdog_status', {}, function(ret) {
     if (ret.ret !== 'success') return;
@@ -185,6 +191,7 @@ function localStatus() {
   localLoading = true;
   localRequest('status', {page:localPage,status:$('#local_filter').val(),search:$('#local_search').val(),order:$('#local_order').val(),db_type:$('#local_db_type').val(),library_id:$('#local_library').val(),action:$('#local_action').val(),page_size:$('#local_page_size').val()}, function(ret) {
     var data = ret.data || {}, list = data.events || {};
+    localSelectedIds.clear();
     localRunning = !!data.running;
     $('#local_state').text(data.stopping ? '중지 중 · 현재 요청 대기' : (localRunning ? '실행 중' : '중지됨'));
     $('#local_error').text(data.error || '');
@@ -221,7 +228,15 @@ function localStatus() {
     (list.items || []).forEach(function(item) {
       var tr = $('<div class="doctor-gdrive-row" role="listitem"></div>');
       var dbLabel = {general:'일반 DB',adult:'성인 DB',audiobook:'오디오북 DB',video:'비디오 DB'};
-      tr.append($('<div class="doctor-gdrive-id"></div>').append($('<strong></strong>').text('#' + item.id), $('<small class="doctor-muted"></small>').text(dbLabel[item.db_type] || '미분류')));
+      var idCell = $('<div class="doctor-gdrive-id"></div>');
+      if (item.status === 'failed') {
+        idCell.append($('<input type="checkbox" class="local-select-item" style="margin-right:0.4rem;">').attr('data-id', item.id).prop('checked', localSelectedIds.has(item.id)).on('change', function() {
+          if (this.checked) localSelectedIds.add(item.id); else localSelectedIds.delete(item.id);
+          updateLocalSelectionUI();
+        }));
+      }
+      idCell.append($('<strong></strong>').text('#' + item.id), $('<small class="doctor-muted"></small>').text(dbLabel[item.db_type] || '미분류'));
+      tr.append(idCell);
       var info = $('<div class="doctor-gdrive-info"></div>');
       var action = String(item.action || '').toLowerCase();
       var actionClass = /^(create|edit|delete|move|rename|restore)$/.test(action) ? action : 'edit';
@@ -251,6 +266,7 @@ function localStatus() {
       tr.append(actions); $('#local_events').append(tr);
     });
     $('#local_empty').prop('hidden', !!(list.items || []).length);
+    updateLocalSelectionUI();
     localPage = list.page || 1; localPages = list.pages || 1;
     $('#local_page').text(localPage + ' / ' + localPages);
     $('#local_prev').prop('disabled', localPage <= 1); $('#local_next').prop('disabled', localPage >= localPages);
@@ -282,6 +298,36 @@ function closeLocalRetry() {
   $('#local_retry_modal').attr('aria-hidden', 'true').hide();
 }
 $('#local_retry_close').on('click', closeLocalRetry);
+
+function updateLocalSelectionUI() {
+  var count = localSelectedIds.size;
+  $('#local_selected_count').text(count);
+  $('#local_retry_selected').prop('disabled', count === 0);
+  var failedBoxes = $('.local-select-item');
+  var checkedBoxes = failedBoxes.filter(function() { return this.checked; });
+  $('#local_select_all').prop('checked', failedBoxes.length > 0 && checkedBoxes.length === failedBoxes.length);
+}
+$('#local_select_all').on('change', function() {
+  var checked = this.checked;
+  $('.local-select-item').each(function() {
+    this.checked = checked;
+    var id = parseInt($(this).attr('data-id'), 10);
+    if (checked) localSelectedIds.add(id); else localSelectedIds.delete(id);
+  });
+  updateLocalSelectionUI();
+});
+$('#local_select_clear').on('click', function() {
+  localSelectedIds.clear();
+  $('.local-select-item').prop('checked', false);
+  updateLocalSelectionUI();
+});
+$('#local_retry_selected').on('click', function() {
+  if (!localSelectedIds.size) return;
+  if (!confirm('선택한 ' + localSelectedIds.size + '건을 재시도하시겠습니까?')) return;
+  localRequest('retry_selected', {ids: Array.from(localSelectedIds).join(',')}, function(ret) {
+    if (ret.ret === 'success') { localSelectedIds.clear(); localStatus(); }
+  });
+});
 $('#local_retry_modal').on('click', function(e) { if (e.target === this) closeLocalRetry(); });
 $('#local_retry_single').on('click', function() {
   $('#local_retry_status').text('재시도 등록 중');
