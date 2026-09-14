@@ -219,8 +219,24 @@ class PollingRoot:
         events = []
         if self.snapshot is not None:
             removed = old.keys() - current.keys()
-            if removed and (base_size + len(current) == 0 or len(removed) >= 100 or (len(removed) >= 20 and len(removed) >= len(self.snapshot) * .2)):
-                raise ValueError("대량 삭제 또는 빈 마운트 의심. 확인 후 기준 재설정 또는 수동 스캔이 필요합니다.")
+            if removed:
+                # 정리 작업(파일 이동·재정리 등)이 활발한 라이브러리는 한 번의 조회에서도
+                # 대량 삭제가 정상적으로 발생할 수 있다는 피드백으로, 삭제 건수·비율 자체는
+                # 더 이상 막지 않고 그대로 진행한다(실제 삭제된 파일을 그대로 반영하는 게
+                # 맞는 동작). 다만 "이번 조회에서 발견된 항목이 통째로 0개"인 경우는 삭제와
+                # 성격이 다르다 - 마운트가 순간적으로 빠지거나 아직 안 올라온 상태에서 훑은
+                # 것일 가능성이 높고, 이걸 그대로 반영하면 실제로는 멀쩡한 파일들이 전부
+                # "삭제됨"으로 잘못 처리될 위험이 있다. 그래서 이 경우만 막지는 않되(요청대로
+                # 처리를 계속 진행), 어느 경로에서 감지됐는지 상태로 남겨 관리자가 사후에
+                # 확인할 수 있게 한다.
+                if base_size + len(current) == 0:
+                    emit({
+                        "path": root,
+                        "status": "주의: 빈 마운트 의심 - 계속 진행",
+                        "warning": f"{root} 경로에서 이번 조회 시 항목이 하나도 발견되지 않았습니다"
+                                   f"(이전 기준 {len(removed)}건 전부 삭제 처리). 마운트가 일시적으로"
+                                   f" 빠졌거나 아직 안 올라온 상태일 수 있으니 확인하세요.",
+                    })
             for path in sorted(removed):
                 events.append(self.event("delete", path, old[path][0]))
             for path, signature in current.items():
@@ -376,7 +392,7 @@ def run(config):
                         state["reconcile"] = time.monotonic() + 3600
                     else:
                         monitor.collect(accept, paths=pending)
-                    emit({"path": monitor.root["path"], "mode": state["mode"], "status": "감시 중", "entries": len(monitor.snapshot), "file_count": monitor.file_count, "directory_count": monitor.directory_count, "max_entries": max_entries, "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"), "error": ""})
+                    emit({"path": monitor.root["path"], "mode": state["mode"], "status": "감시 중", "entries": len(monitor.snapshot), "file_count": monitor.file_count, "directory_count": monitor.directory_count, "max_entries": max_entries, "checked_at": time.strftime("%Y-%m-%d %H:%M:%S"), "error": "", "warning": ""})
                     state["next"] = now + (interval if state["mode"] == "polling" else 2)
                 except Exception as error:
                     emit({"path": monitor.root["path"], "status": "보류", "error": str(error)})

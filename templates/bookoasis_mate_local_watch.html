@@ -204,6 +204,7 @@ function localStatus() {
         state.append($('<p class="doctor-muted mb-0"></p>').text(summary + ' / 한도 ' + Number(root.max_entries).toLocaleString() + (root.scan_scope ? ' · ' + root.scan_scope + ' 비교' : '')));
       }
       if (root.error) state.append($('<p class="text-danger mb-0"></p>').text(root.error));
+      if (root.warning) state.append($('<p class="text-warning mb-0"></p>').text('⚠ ' + root.warning));
       $('#local_roots_status').append(state);
     });
     var counts = data.counts || {};
