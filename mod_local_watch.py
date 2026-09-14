@@ -217,7 +217,11 @@ class ModuleLocalWatch(PluginModuleBase):
         return client.request_scan(settings.get("webhook_token"), library_id, db_type=db_type)
 
     def _work(self):
-        last_cleanup = 0
+        # time.monotonic()은 "시스템 부팅 이후 경과 시간"이라 0으로 초기화하면, 서버가
+        # 1시간 이상 켜져 있던 상태에서 작업을 시작할 때 "1시간마다"가 아니라 시작하자마자
+        # 즉시 첫 정리가 실행되는 버그가 있었다. 작업이 실제로 시작된 시점을 기준으로 삼아야
+        # "매시간"이라는 의도대로 동작한다.
+        last_cleanup = time.monotonic()
         while not self._stop.wait(2):
             events = []
             try:

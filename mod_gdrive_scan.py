@@ -1017,6 +1017,11 @@ class ModuleGDriveScan(PluginModuleBase):
                 return False
             self._stop_event.clear()
             self._wake_event.clear()
+            # _last_cleanup_monotonic이 0.0(falsy)인 상태로 남아있으면 _cleanup_if_due()의
+            # "and" 조건이 무너져(0.0 and ...는 항상 False라 return 0을 안 타고 바로
+            # 실행됨) "1시간마다"가 아니라 작업 시작 직후 즉시 첫 정리가 실행되는 버그가
+            # 있었다. 작업이 실제로 시작되는 이 시점을 기준으로 삼아야 의도대로 동작한다.
+            self._last_cleanup_monotonic = time.monotonic()
             self._worker_thread = threading.Thread(
                 target=self._worker_loop,
                 name="bookoasis-mate-gdrive-scan",
