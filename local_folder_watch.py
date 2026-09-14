@@ -232,12 +232,20 @@ class PollingRoot:
                     events.append(self.event("create", path, signature[0]))
                 elif previous != signature and not signature[0]:
                     events.append(self.event("edit", path, False))
-                if len(events) > 10000:
-                    raise ValueError("한 번에 10,000건을 초과한 변경입니다. 수동 스캔 후 기준을 재설정하세요.")
         if events and accept:
-            if len(events) > 10000:
-                raise ValueError("한 번에 10,000건을 초과한 변경입니다. 범위를 줄이거나 수동 스캔 후 기준을 재설정하세요.")
-            accept(events)
+            # 초기 설치 직후나 오랜만의 재시작처럼 한 번에 감지되는 변경량은 사용자·환경마다
+            # 크게 다르다(수백 건일 수도, 수만~수십만 건일 수도 있다). 예전에는 10,000건이라는
+            # 고정값을 넘으면 그냥 통째로 실패시켰는데, 이러면 대량 변경이 정상적인 상황(최초
+            # 설치, 오랜 정지 후 재시작)에서 사용자마다 다른 규모를 반영하지 못하고 매번 수동
+            # 개입이 필요했다. 대신 이미 사용자가 직접 조절하는 "경로당 감시 항목 한도"
+            # (self.max_entries)를 배치 상한으로 재사용해, 그 값을 넘으면 실패시키지 않고
+            # 여러 배치로 나눠 순차적으로 전달한다. accept()는 애초에 "배치 하나 보내고 저장
+            # 확인(ok) 받기"를 반복하는 동기 프로토콜로 설계돼 있어(run()의 accept 정의 참고)
+            # 여러 번 호출하는 것 자체는 안전하다 - 중간에 실패해도 이미 전달·확인된 배치는
+            # save()로 기준에 반영되므로 처음부터 다시 하지 않는다.
+            batch_size = max(1, self.max_entries)
+            for offset in range(0, len(events), batch_size):
+                accept(events[offset:offset + batch_size])
         # 큐 확인 후 저장하므로 중간 종료 시 재전달될 수 있지만 미전달 변경을 건너뛰지 않습니다.
         self.save(old, current, identity)
         directories = sum(value[0] for value in current.values())
@@ -324,7 +332,7 @@ def run(config):
                                         self.target["full"] = True
                                     elif self.target["monitor"].included(relative, event.is_directory) and not self.target["full"]:
                                         self.target["pending"].add(relative)
-                                    if len(self.target["pending"]) > 10000:
+                                    if len(self.target["pending"]) > self.target["monitor"].max_entries:
                                         self.target["full"] = True
                                         self.target["pending"].clear()
                                 now = time.monotonic()
@@ -377,7 +385,7 @@ def run(config):
                         state["changed"] = state["first"] = now
                         state["full"] = state["full"] or full
                         state["pending"].update(pending)
-                        if state["full"] or len(state["pending"]) > 10000:
+                        if state["full"] or len(state["pending"]) > monitor.max_entries:
                             state["full"] = True
                             state["pending"].clear()
             time.sleep(1)

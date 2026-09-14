@@ -323,6 +323,30 @@ class ModuleLocalWatch(PluginModuleBase):
                     if self.running():
                         raise ValueError("감지·스캔 작업을 중지한 뒤 삭제해 주세요.")
                     self.model.clear_pending()
+            elif command == "cleanup_period":
+                retention_days = int(self._settings().get("local_watch_retention_days") or 30)
+                deleted = self.model.cleanup_terminal(retention_days=retention_days, delete_all=False)
+                return jsonify({"ret": "success", "msg": f"보존기간({retention_days}일)이 지난 완료·최종 실패 이력 {deleted}건을 삭제했습니다."})
+            elif command == "cleanup_all":
+                deleted = self.model.cleanup_terminal(delete_all=True)
+                return jsonify({"ret": "success", "msg": f"완료·최종 실패 이력 {deleted}건을 전부 삭제했습니다."})
+            elif command in {"retry_batch_preview", "retry_batch"}:
+                event = self.model.failed(req.form.get("id"))
+                if not event:
+                    return jsonify({"ret": "warning", "msg": "재시도할 최종 실패 이벤트를 찾을 수 없습니다."}), 404
+                error = str(event.get("error") or "").strip()
+                if not error:
+                    return jsonify({"ret": "warning", "msg": "같은 오류 대상을 찾으려면 실패 원인이 필요합니다."}), 400
+                candidates = self.model.failed_matching_error(error)
+                event_ids = [int(candidate["id"]) for candidate in candidates]
+                if command == "retry_batch_preview":
+                    return jsonify({"ret": "success", "msg": f"같은 오류 {len(event_ids)}건을 확인했습니다.",
+                        "data": {"error": error, "matched": len(event_ids)}})
+                updated = self.model.retry_many(event_ids)
+                # _work()가 2초 주기로 claim_ready를 자동 폴링하므로 별도로 깨울 필요 없음.
+                return jsonify({"ret": "success" if updated else "warning",
+                    "msg": f"같은 오류 이벤트 {updated}건을 재시도에 등록했습니다." if updated else "대상 이벤트 상태가 변경되어 재시도하지 못했습니다.",
+                    "data": {"error": error, "matched": len(event_ids), "updated": updated}})
             else:
                 return jsonify({"ret": "warning", "msg": "지원하지 않는 요청입니다."}), 400
             return jsonify({"ret": "success", "msg": "요청을 처리했습니다."})

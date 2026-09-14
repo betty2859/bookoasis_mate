@@ -57,7 +57,34 @@
   <div class="table-responsive"><div id="local_events" class="doctor-gdrive-list" role="list" aria-label="변경 이벤트"></div></div>
   <div id="local_empty" class="doctor-empty" hidden>조건에 맞는 변경 이벤트가 없습니다.</div>
   <div class="doctor-pagination"><button id="local_prev" class="btn btn-sm btn-outline-primary">이전</button><span id="local_page" class="mx-2"></span><button id="local_next" class="btn btn-sm btn-outline-primary">다음</button></div>
-  <div class="doctor-card doctor-section mt-3"><h4>변경 이벤트 DB 정리</h4><button id="local_clear" class="btn btn-sm btn-outline-danger">대기·재시도 일괄 삭제</button><p class="doctor-muted mt-2">작업 중지 후 삭제할 수 있습니다. 이미 전달된 스캔은 취소하지 않습니다.</p></div>
+  <div class="doctor-card doctor-section mt-3">
+    <h4>변경 이벤트 DB 정리</h4>
+    <p class="doctor-muted">기간 적용 삭제와 종료 이력 전체 삭제는 완료·최종 실패 이력만 정리합니다. 기간 적용 삭제에는 설정의 보존기간을 사용합니다.</p>
+    <div class="doctor-cleanup-actions">
+      <button id="local_cleanup_period" class="btn btn-sm btn-outline-warning">기간 적용 삭제</button>
+      <button id="local_cleanup_all" class="btn btn-sm btn-outline-danger">종료 이력 전체 삭제</button>
+      <button id="local_clear" class="btn btn-sm btn-danger">대기·재시도 일괄 삭제</button>
+    </div>
+    <p class="doctor-muted mt-2">대기열 삭제는 작업 중지 후 가능합니다. 이미 전달된 스캔은 취소하지 않습니다.</p>
+  </div>
+
+  <div id="local_retry_modal" class="doctor-action-modal" aria-hidden="true">
+    <div class="doctor-action-dialog" role="dialog" aria-modal="true" aria-labelledby="local_retry_title">
+      <div class="doctor-action-dialog-header">
+        <h4 id="local_retry_title">실패 이벤트 재시도</h4>
+        <button id="local_retry_close" type="button" class="doctor-action-close" aria-label="닫기">&times;</button>
+      </div>
+      <input type="hidden" id="local_retry_id">
+      <p class="doctor-muted">같은 최종 오류를 가진 이벤트를 한 번에 재시도할 수 있습니다. 감시 경로가 다시 정상 상태여야 처리됩니다.</p>
+      <pre id="local_retry_error" class="doctor-gdrive-json" style="min-height:70px;max-height:140px"></pre>
+      <div class="doctor-toolbar">
+        <button type="button" class="btn btn-outline-warning" id="local_retry_single">이 이벤트만 재시도</button>
+        <button type="button" class="btn btn-outline-primary" id="local_retry_preview">같은 오류 대상 검사</button>
+        <button type="button" class="btn btn-warning" id="local_retry_batch">같은 오류 일괄 재시도</button>
+        <span id="local_retry_status" class="doctor-query-status"></span>
+      </div>
+    </div>
+  </div>
 </div>
 </div>
 <div class="tab-pane fade" id="local_watch_manual" role="tabpanel" aria-labelledby="local_manual_tab">
@@ -219,7 +246,7 @@ function localStatus() {
       if (item.status === 'completed' || item.status === 'failed') actions.append($('<button class="btn btn-sm btn-outline-danger">삭제</button>').on('click', function() {
         if (confirm('#' + item.id + ' 이벤트 기록만 삭제할까요? 실제 파일은 삭제하지 않습니다.')) localRequest('delete', {id:item.id}, localStatus);
       }));
-      if (item.status === 'failed') actions.append($('<button class="btn btn-sm btn-outline-primary">재시도</button>').on('click', function() { localRequest('retry', {id:item.id}, localStatus); }));
+      if (item.status === 'failed') actions.append($('<button class="btn btn-sm btn-outline-primary">재시도</button>').on('click', function() { openLocalRetry(item); }));
       tr.append(actions); $('#local_events').append(tr);
     });
     $('#local_empty').prop('hidden', !!(list.items || []).length);
@@ -241,6 +268,41 @@ $('#local_resume').on('click', function() { localRequest('resume', {}, localStat
 $('#local_start').on('click', function() { if (confirm('저장된 감시 기준을 새 기준으로 교체합니다. 기존 파일과 중지 중 변경은 자동 스캔하지 않습니다. 시작할까요?')) localRequest('start', {}, localStatus); });
 $('#local_stop').on('click', function() { localRequest('stop', {}, localStatus); });
 $('#local_clear').on('click', function() { if (confirm('로컬 감지 대기·재시도 이벤트를 삭제할까요?')) localRequest('clear_pending', {}, localStatus); });
+$('#local_cleanup_period').on('click', function() { if (confirm('설정한 보존기간이 지난 완료·최종 실패 이벤트를 삭제하시겠습니까?')) localRequest('cleanup_period', {}, localStatus); });
+$('#local_cleanup_all').on('click', function() { if (confirm('완료·최종 실패 이벤트를 모두 삭제하시겠습니까? 대기 중인 작업은 유지됩니다.')) localRequest('cleanup_all', {}, localStatus); });
+
+function openLocalRetry(item) {
+  $('#local_retry_id').val(item.id);
+  $('#local_retry_error').text(item.error || '(오류 메시지 없음)');
+  $('#local_retry_status').text('');
+  $('#local_retry_modal').attr('aria-hidden', 'false').show();
+}
+function closeLocalRetry() {
+  $('#local_retry_modal').attr('aria-hidden', 'true').hide();
+}
+$('#local_retry_close').on('click', closeLocalRetry);
+$('#local_retry_modal').on('click', function(e) { if (e.target === this) closeLocalRetry(); });
+$('#local_retry_single').on('click', function() {
+  $('#local_retry_status').text('재시도 등록 중');
+  localRequest('retry', {id: $('#local_retry_id').val()}, function(ret) {
+    $('#local_retry_status').text(ret.msg || '');
+    if (ret.ret === 'success') { closeLocalRetry(); localStatus(); }
+  });
+});
+$('#local_retry_preview').on('click', function() {
+  $('#local_retry_status').text('같은 오류 대상 확인 중');
+  localRequest('retry_batch_preview', {id: $('#local_retry_id').val()}, function(ret) {
+    $('#local_retry_status').text(ret.msg || '');
+  });
+});
+$('#local_retry_batch').on('click', function() {
+  if (!confirm('같은 최종 오류를 가진 이벤트를 모두 재시도하시겠습니까?')) return;
+  $('#local_retry_status').text('일괄 등록 중');
+  localRequest('retry_batch', {id: $('#local_retry_id').val()}, function(ret) {
+    $('#local_retry_status').text(ret.msg || '');
+    if (ret.ret === 'success') { closeLocalRetry(); localStatus(); }
+  });
+});
 $('#local_refresh').on('click', function() { localPage = 1; localStatus(); });
 $('#local_filters select').on('change', function() { if (this.id === 'local_db_type') $('#local_library').val(''); localPage = 1; localStatus(); });
 $('#local_search').on('keydown', function(event) { if (event.key === 'Enter') { event.preventDefault(); localPage = 1; localStatus(); } });
