@@ -280,6 +280,45 @@ class ScanEventBase(ModelBase):
             return [entity.to_dict() for entity in entities]
 
     @classmethod
+    def failed_matching_filters(cls, action="", db_type="", library_id="", search="", limit=20000):
+        """현재 화면 필터 조건(list_page와 동일한 필터 로직, status는 항상 failed로
+        고정)에 맞는 실패 이벤트 전체 ID를 페이지네이션 없이 조회한다. "전체 선택" 후
+        일괄 재시도할 때, 6천~수만 건을 브라우저로 전부 내려받아 체크박스를 그리는
+        대신 서버에서 곧바로 ID만 뽑아 쓰기 위한 용도. limit으로 한 번에 처리 가능한
+        상한을 둔다(기본 20,000건 - retry_many가 어차피 500건씩 나눠 처리하므로 이보다
+        훨씬 커도 안전하지만, 실수로 전체 DB를 다 잠그는 사고를 막기 위한 안전판).
+        """
+        action = str(action or "").strip()
+        db_type = str(db_type or "").strip()
+        library_id = str(library_id or "").strip()
+        search = str(search or "").strip()
+        limit = max(1, min(int(limit or 20000), 100000))
+        with F.app.app_context():
+            query = F.db.session.query(cls.id).filter(cls.status == "failed")
+            selected_library_id = library_id
+            selected_db_type = ""
+            if library_id not in {"", "unassigned"} and ":" in library_id:
+                selected_db_type, selected_library_id = library_id.split(":", 1)
+            if action:
+                query = query.filter(cls.action == action)
+            if selected_db_type or db_type:
+                query = query.filter(cls.db_type == (selected_db_type or db_type))
+            if library_id == "unassigned":
+                query = query.filter(cls.library_id.is_(None))
+            elif library_id:
+                query = query.filter(cls.library_id == int(selected_library_id))
+            if search:
+                pattern = f"%{search}%"
+                query = query.filter(
+                    (cls.path.like(pattern))
+                    | (cls.removed_path.like(pattern))
+                    | (cls.library_name.like(pattern))
+                    | (cls.error.like(pattern))
+                )
+            rows = query.order_by(cls.id.asc()).limit(limit).all()
+            return [row[0] for row in rows]
+
+    @classmethod
     def retry_many(cls, event_ids):
         event_ids = sorted({int(event_id) for event_id in event_ids})
         if not event_ids:

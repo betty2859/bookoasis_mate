@@ -54,11 +54,13 @@
     <button id="local_refresh" class="btn btn-sm btn-primary">검색</button>
     <button id="local_reset" class="btn btn-sm btn-outline-secondary">리셋</button></div>
   </div>
-  <div class="doctor-toolbar" style="justify-content:flex-start; gap:0.5rem; margin-bottom:0.5rem;">
-    <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; margin:0;"><input type="checkbox" id="local_select_all"> 전체 선택(실패 항목만)</label>
+  <div class="doctor-toolbar" style="justify-content:flex-start; gap:0.5rem; margin-bottom:0.5rem; flex-wrap:wrap;">
+    <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer; margin:0;"><input type="checkbox" id="local_select_all"> 이 페이지 전체 선택(실패 항목만)</label>
+    <button type="button" id="local_select_all_filtered" class="btn btn-sm btn-outline-warning">검색 조건 전체 선택</button>
     <button type="button" id="local_select_clear" class="btn btn-sm btn-outline-secondary">선택 해제</button>
     <button type="button" id="local_retry_selected" class="btn btn-sm btn-warning" disabled>선택 항목 일괄 재시도 (<span id="local_selected_count">0</span>)</button>
   </div>
+  <div id="local_select_all_status" class="doctor-muted" style="margin-bottom:0.5rem;"></div>
   <div class="table-responsive"><div id="local_events" class="doctor-gdrive-list" role="list" aria-label="변경 이벤트"></div></div>
   <div id="local_empty" class="doctor-empty" hidden>조건에 맞는 변경 이벤트가 없습니다.</div>
   <div class="doctor-pagination"><button id="local_prev" class="btn btn-sm btn-outline-primary">이전</button><span id="local_page" class="mx-2"></span><button id="local_next" class="btn btn-sm btn-outline-primary">다음</button></div>
@@ -186,12 +188,12 @@ function localRequest(command, data, done) {
     error:function(xhr) { notify((xhr.responseJSON || {}).msg || '요청 실패', 'warning'); },
     complete:function() { if (command === 'status') localLoading = false; }});
 }
-function localStatus() {
+function localStatus(preserveSelection) {
   if (localLoading) return;
   localLoading = true;
   localRequest('status', {page:localPage,status:$('#local_filter').val(),search:$('#local_search').val(),order:$('#local_order').val(),db_type:$('#local_db_type').val(),library_id:$('#local_library').val(),action:$('#local_action').val(),page_size:$('#local_page_size').val()}, function(ret) {
     var data = ret.data || {}, list = data.events || {};
-    localSelectedIds.clear();
+    if (!preserveSelection) { localSelectedIds.clear(); $('#local_select_all_status').text(''); }
     localRunning = !!data.running;
     $('#local_state').text(data.stopping ? '중지 중 · 현재 요청 대기' : (localRunning ? '실행 중' : '중지됨'));
     $('#local_error').text(data.error || '');
@@ -319,13 +321,34 @@ $('#local_select_all').on('change', function() {
 $('#local_select_clear').on('click', function() {
   localSelectedIds.clear();
   $('.local-select-item').prop('checked', false);
+  $('#local_select_all_status').text('');
   updateLocalSelectionUI();
+});
+$('#local_select_all_filtered').on('click', function() {
+  var btn = $(this);
+  btn.prop('disabled', true).text('불러오는 중…');
+  localRequest('select_all_ids', {
+    action: $('#local_action').val(),
+    db_type: $('#local_db_type').val(),
+    library_id: $('#local_library').val(),
+    search: $('#local_search').val()
+  }, function(ret) {
+    btn.prop('disabled', false).text('검색 조건 전체 선택');
+    if (ret.ret !== 'success') return;
+    var ids = (ret.data || {}).ids || [];
+    localSelectedIds = new Set(ids);
+    $('.local-select-item').each(function() {
+      this.checked = localSelectedIds.has(parseInt($(this).attr('data-id'), 10));
+    });
+    $('#local_select_all_status').text(ids.length + '건이 선택됐습니다(다른 페이지의 항목도 포함).');
+    updateLocalSelectionUI();
+  });
 });
 $('#local_retry_selected').on('click', function() {
   if (!localSelectedIds.size) return;
   if (!confirm('선택한 ' + localSelectedIds.size + '건을 재시도하시겠습니까?')) return;
   localRequest('retry_selected', {ids: Array.from(localSelectedIds).join(',')}, function(ret) {
-    if (ret.ret === 'success') { localSelectedIds.clear(); localStatus(); }
+    if (ret.ret === 'success') { localSelectedIds.clear(); $('#local_select_all_status').text(''); localStatus(); }
   });
 });
 $('#local_retry_modal').on('click', function(e) { if (e.target === this) closeLocalRetry(); });
@@ -362,7 +385,7 @@ $(function() {
   (roots.length ? roots : [{}]).forEach(localAddRoot);
   localStatus();
   localWatchdogStatus();
-  var timer = setInterval(function() { if (!document.hidden) localStatus(); }, 5000);
+  var timer = setInterval(function() { if (!document.hidden) localStatus(true); }, 5000);
   $(window).on('beforeunload', function() { clearInterval(timer); });
 });
 </script>

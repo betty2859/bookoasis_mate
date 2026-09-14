@@ -351,6 +351,18 @@ class ModuleLocalWatch(PluginModuleBase):
                 return jsonify({"ret": "success" if updated else "warning",
                     "msg": f"같은 오류 이벤트 {updated}건을 재시도에 등록했습니다." if updated else "대상 이벤트 상태가 변경되어 재시도하지 못했습니다.",
                     "data": {"error": error, "matched": len(event_ids), "updated": updated}})
+            elif command == "select_all_ids":
+                # 페이지 크기(현재 최대 200) 제약 없이, 현재 화면 필터(보관함/변경종류/검색어)
+                # 조건에 맞는 실패 이벤트 전체 ID를 한 번에 가져온다. 목록 자체를 전부
+                # 렌더링하지 않고 ID만 받아오므로 6천~수만 건이어도 가볍다.
+                event_ids = self.model.failed_matching_filters(
+                    action=req.form.get("action") or "",
+                    db_type=req.form.get("db_type") or "",
+                    library_id=req.form.get("library_id") or "",
+                    search=req.form.get("search") or "",
+                )
+                return jsonify({"ret": "success", "msg": f"조건에 맞는 실패 항목 {len(event_ids)}건을 선택했습니다.",
+                    "data": {"ids": event_ids}})
             elif command == "retry_selected":
                 raw_ids = req.form.get("ids") or ""
                 try:
@@ -359,8 +371,8 @@ class ModuleLocalWatch(PluginModuleBase):
                     return jsonify({"ret": "warning", "msg": "선택한 항목 형식이 올바르지 않습니다."}), 400
                 if not event_ids:
                     return jsonify({"ret": "warning", "msg": "재시도할 항목을 먼저 선택해 주세요."}), 400
-                if len(event_ids) > 5000:
-                    return jsonify({"ret": "warning", "msg": "한 번에 최대 5,000건까지 선택할 수 있습니다."}), 400
+                if len(event_ids) > 20000:
+                    return jsonify({"ret": "warning", "msg": "한 번에 최대 20,000건까지 선택할 수 있습니다."}), 400
                 # retry_many() 내부가 이미 상태='failed' AND path != ''인 것만 골라 500건씩
                 # 안전하게 나눠 처리하므로, 여기서 넘긴 ID 중 이미 완료·대기 상태로 바뀐
                 # 것이 섞여 있어도 자동으로 걸러진다.
